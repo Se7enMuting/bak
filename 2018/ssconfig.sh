@@ -18,7 +18,8 @@ ISP_DNS=$(nvram get wan0_dns|sed 's/ /\n/g'|grep -v 0.0.0.0|grep -v 127.0.0.1|se
 lan_ipaddr=$(nvram get lan_ipaddr)
 [ "$ss_basic_mode" == "4" ] && ss_basic_mode=3
 game_on=`dbus list ss_acl_mode|cut -d "=" -f 2 | grep 3`
-[ -n "$game_on" ] || [ "$ss_basic_mode" == "3" ] && mangle=1
+glo_on=`dbus list ss_acl_mode|cut -d "=" -f 2 | grep 5`
+[ -n "$game_on" ] || [ -n "$glo_on" ] || [ "$ss_basic_mode" == "3" ] || [ "$ss_basic_mode" == "5" ] && mangle=1
 ip_prefix_hex=`nvram get lan_ipaddr | awk -F "." '{printf ("0x%02x", $1)} {printf ("%02x", $2)} {printf ("%02x", $3)} {printf ("00/0xffffff00\n")}'`
 ss_basic_password=`echo $ss_basic_password|base64_decode`
 IFIP=`echo $ss_basic_server|grep -E "([0-9]{1,3}[\.]){3}[0-9]{1,3}|:"`
@@ -965,6 +966,7 @@ flush_nat(){
 	iptables -t mangle -D PREROUTING -p udp -j SHADOWSOCKS >/dev/null 2>&1
 	iptables -t mangle -F SHADOWSOCKS >/dev/null 2>&1 && iptables -t mangle -X SHADOWSOCKS >/dev/null 2>&1
 	iptables -t mangle -F SHADOWSOCKS_GAM > /dev/null 2>&1 && iptables -t mangle -X SHADOWSOCKS_GAM > /dev/null 2>&1
+	iptables -t mangle -F SHADOWSOCKS_GLO > /dev/null 2>&1 && iptables -t mangle -X SHADOWSOCKS_GLO > /dev/null 2>&1
 	iptables -t nat -D OUTPUT -p tcp -m set --match-set router dst -j REDIRECT --to-ports 3333 >/dev/null 2>&1
 	iptables -t nat -F OUTPUT > /dev/null 2>&1
 	iptables -t nat -X SHADOWSOCKS_EXT > /dev/null 2>&1
@@ -1128,7 +1130,7 @@ lan_acess_control(){
 			# 2 acl in OUTPUT（used by koolproxy）
 			iptables -t nat -A SHADOWSOCKS_EXT -p tcp  $(factor $ports "-m multiport --dport") -m mark --mark "$ipaddr_hex" -$(get_jump_mode $proxy_mode) $(get_action_chain $proxy_mode)
 			# 3 acl in SHADOWSOCKS for mangle
-			if [ "$proxy_mode" == "3" ];then
+			if [ "$proxy_mode" == "3" ] || [ "$proxy_mode" == "5" ];then
 				iptables -t mangle -A SHADOWSOCKS $(factor $ipaddr "-s") -p udp $(factor $ports "-m multiport --dport") -$(get_jump_mode $proxy_mode) $(get_action_chain $proxy_mode)
 			else
 				[ "$mangle" == "1" ] && iptables -t mangle -A SHADOWSOCKS $(factor $ipaddr "-s") -p udp -j RETURN
@@ -1214,6 +1216,10 @@ apply_nat_rules(){
 	[ "$mangle" == "1" ] && iptables -t mangle -A SHADOWSOCKS_GAM -p udp -m set --match-set black_list dst -j TPROXY --on-port 3333 --tproxy-mark 0x07
 	# cidr黑名单控制-chnroute（走ss）
 	[ "$mangle" == "1" ] && iptables -t mangle -A SHADOWSOCKS_GAM -p udp -m set ! --match-set chnroute dst -j TPROXY --on-port 3333 --tproxy-mark 0x07
+	# 创建全局模式udp rule
+	[ "$mangle" == "1" ] && iptables -t mangle -N SHADOWSOCKS_GLO
+	# IP/CIDR/域名 黑名单控制（走ss）
+	[ "$mangle" == "1" ] && iptables -t mangle -A SHADOWSOCKS_GLO -p udp -j TPROXY --on-port 3333 --tproxy-mark 0x07
 	#-------------------------------------------------------
 	# 局域网黑名单（不走ss）/局域网黑名单（走ss）
 	lan_acess_control
@@ -1229,8 +1235,8 @@ apply_nat_rules(){
 	# 如果是主模式游戏模式，则把SHADOWSOCKS链中剩余udp流量转发给SHADOWSOCKS_GAM链
 	# 如果主模式不是游戏模式，则不需要把SHADOWSOCKS链中剩余udp流量转发给SHADOWSOCKS_GAM，不然会造成其他模式主机的udp也走游戏模式
 	###[ "$mangle" == "1" ] && ss_acl_default_mode=3
-	[ "$ss_acl_default_mode" != "0" ] && [ "$ss_acl_default_mode" != "3" ] && ss_acl_default_mode=0
-	[ "$ss_basic_mode" == "3" ] && iptables -t mangle -A SHADOWSOCKS -p udp -j $(get_action_chain $ss_acl_default_mode)
+	[ "$ss_acl_default_mode" != "0" ] && [ "$ss_acl_default_mode" != "3" ] && [ "$ss_acl_default_mode" != "5" ] && ss_acl_default_mode=0
+	[ "$ss_basic_mode" == "3" ] || [ "$ss_basic_mode" == "5" ] && iptables -t mangle -A SHADOWSOCKS -p udp -j $(get_action_chain $ss_acl_default_mode)
 	# 重定所有流量到 SHADOWSOCKS
 	KP_NU=`iptables -nvL PREROUTING -t nat |sed 1,2d | sed -n '/KOOLPROXY/='|head -n1`
 	[ "$KP_NU" == "" ] && KP_NU=0
