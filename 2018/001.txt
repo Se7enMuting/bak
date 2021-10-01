@@ -1,7 +1,0 @@
-
-
-安装命令
-
-screen -S install #避免意外中断ssh连接导致安装失败
-
-wget -c --no-check-certificate https://static.shkong.com/code/transmission/install.sh && chmod +x install.sh && bash install.sh
